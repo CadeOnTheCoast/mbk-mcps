@@ -502,8 +502,14 @@ export class EAClient {
 
   /**
    * Interaction history = the person's notes that carry a contactHistory
-   * attribute (i.e. were logged as contact history, not free-form notes).
-   * Contact-type names are resolved so callers see "Meeting" rather than an id.
+   * attribute when the API returns one.
+   *
+   * IMPORTANT: the public GET /people/{vanId}/notes endpoint does NOT return
+   * the contactHistory sub-object (verified against the docs + a live record
+   * whose UI clearly shows "Contacted on …"), and there is no per-person
+   * "list contact history" read endpoint. Notes are therefore the only
+   * readable surface that holds the interaction details, so we return them —
+   * enriched with the contact type when contactHistory happens to be present.
    */
   async getInteractions(vanId: number): Promise<{ items: EAInteraction[]; count: number }> {
     const [notes, types] = await Promise.all([
@@ -516,19 +522,18 @@ export class EAClient {
       if (t.contactTypeId != null && label) typeName.set(t.contactTypeId, label)
     }
 
-    const items: EAInteraction[] = notes.items
-      .filter((n) => n.contactHistory && n.contactHistory.contactTypeId != null)
-      .map((n) => {
-        const ch = n.contactHistory!
-        return {
-          dateCanvassed: ch.dateCanvassed ?? n.createdDate ?? n.dateCreated,
-          contactTypeId: ch.contactTypeId,
-          contactTypeName: ch.contactTypeId != null ? typeName.get(ch.contactTypeId) ?? null : null,
-          resultCodeId: ch.resultCodeId ?? null,
-          notes: n.text ? [{ text: n.text }] : [],
-          createdByName: n.createdByName ?? null,
-        }
-      })
+    const items: EAInteraction[] = notes.items.map((n) => {
+      const ch = n.contactHistory
+      const ctId = ch?.contactTypeId
+      return {
+        dateCanvassed: ch?.dateCanvassed ?? n.createdDate ?? n.dateCreated,
+        contactTypeId: ctId,
+        contactTypeName: ctId != null ? typeName.get(ctId) ?? null : null,
+        resultCodeId: ch?.resultCodeId ?? null,
+        notes: n.text ? [{ text: n.text }] : [],
+        createdByName: n.createdByName ?? null,
+      }
+    })
 
     return { items, count: items.length }
   }

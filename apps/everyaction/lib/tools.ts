@@ -67,13 +67,13 @@ function formatInteraction(i: EAInteraction): string {
   const date = i.dateCanvassed
     ? new Date(i.dateCanvassed).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
     : "?";
-  const type = i.contactTypeName ?? `Type ID ${i.contactTypeId ?? "?"}`;
-  const result = i.resultCodeName ?? (i.resultCodeId ? `Result ID ${i.resultCodeId}` : "No result recorded");
   const by = i.createdByName ? ` by ${i.createdByName}` : "";
-  const note = i.notes?.[0]?.text
-    ? `\n  Note: "${i.notes[0].text.slice(0, 120)}${i.notes[0].text.length > 120 ? "..." : ""}"`
-    : "";
-  return `[${date}${by}] ${type} -- ${result}${note}`;
+  // Contact type only resolves when the API returns contactHistory; otherwise
+  // it's a note-backed interaction, so lead with the date + details.
+  const type = i.contactTypeName ? ` ${i.contactTypeName}` : "";
+  const text = i.notes?.[0]?.text ?? "";
+  const body = text ? `\n  ${text.slice(0, 400)}${text.length > 400 ? "..." : ""}` : "";
+  return `[${date}${by}]${type}${body}`;
 }
 
 function uniqueNumbers(values: number[]) {
