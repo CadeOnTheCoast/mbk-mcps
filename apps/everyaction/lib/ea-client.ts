@@ -171,6 +171,21 @@ function createNoopLogger(): Logger {
   }
 }
 
+/**
+ * EveryAction's "supporting list" endpoints (contactTypes, resultCodes,
+ * inputTypes, ...) return a BARE JSON array, not the paginated
+ * `{ items, count }` envelope that /people and /activistCodes use. Normalize
+ * both shapes so callers can always read `.items`.
+ */
+function asItems<T>(response: unknown): { items: T[]; count: number } {
+  if (Array.isArray(response)) {
+    return { items: response as T[], count: response.length }
+  }
+  const envelope = (response ?? {}) as { items?: T[]; count?: number }
+  const items = envelope.items ?? []
+  return { items, count: envelope.count ?? items.length }
+}
+
 export class EAClient {
   private readonly baseUrl: string
   private readonly authHeader: string
@@ -445,10 +460,13 @@ export class EAClient {
     )
   }
 
-  async listResultCodes(contactTypeId?: number): Promise<{ items: EAResultCode[] }> {
-    const params: Record<string, string> = { $top: '100' }
-    if (contactTypeId) params.contactTypeId = String(contactTypeId)
-    return this.request<{ items: EAResultCode[] }>('GET', '/canvassResponses/resultCodes', undefined, params)
+  async listResultCodes(contactTypeId?: number): Promise<{ items: EAResultCode[]; count: number }> {
+    // /canvassResponses/resultCodes returns a bare array, not a paginated envelope.
+    const params: Record<string, string> | undefined = contactTypeId
+      ? { contactTypeId: String(contactTypeId) }
+      : undefined
+    const raw = await this.request<unknown>('GET', '/canvassResponses/resultCodes', undefined, params)
+    return asItems<EAResultCode>(raw)
   }
 
   async findContactTypeByName(name: string): Promise<EAContactType | null> {
@@ -476,13 +494,10 @@ export class EAClient {
     )
   }
 
-  async listContactTypes(limit = 200): Promise<{ items: EAContactType[]; count: number }> {
-    return this.request<{ items: EAContactType[]; count: number }>(
-      'GET',
-      '/canvassResponses/contactTypes',
-      undefined,
-      { $top: String(limit) }
-    )
+  async listContactTypes(): Promise<{ items: EAContactType[]; count: number }> {
+    // /canvassResponses/contactTypes returns a bare array, not a paginated envelope.
+    const raw = await this.request<unknown>('GET', '/canvassResponses/contactTypes')
+    return asItems<EAContactType>(raw)
   }
 
   async findActivistCodeByName(name: string): Promise<EAActivistCode | null> {
