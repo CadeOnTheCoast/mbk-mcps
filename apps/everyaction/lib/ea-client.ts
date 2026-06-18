@@ -378,7 +378,10 @@ export class EAClient {
   }
 
   async getPerson(vanId: number): Promise<EAPerson> {
-    return this.request<EAPerson>('GET', `/people/${vanId}`)
+    // EA omits emails/phones/addresses unless explicitly expanded.
+    return this.request<EAPerson>('GET', `/people/${vanId}`, undefined, {
+      $expand: 'emails,phones,addresses',
+    })
   }
 
   async getNotes(vanId: number): Promise<{ items: EANote[]; count: number }> {
@@ -566,38 +569,39 @@ export class EAClient {
     return { person, recentNotes: notes.items.slice(0, 5) }
   }
 
+  /**
+   * Update an existing person. EveryAction does NOT support PATCH on /people;
+   * POST /people/{vanId} is the documented update verb (an alias for
+   * findOrCreate with the vanId fixed). Contact sub-objects (emails, phones,
+   * addresses, customFieldValues) are merged in via this same body — there are
+   * no /people/{vanId}/emails-style sub-endpoints.
+   */
   async updatePerson(vanId: number, data: {
     firstName?: string
     lastName?: string
     middleName?: string
-    prefix?: string
     suffix?: string
-    nickname?: string
     employer?: string
     occupation?: string
-    website?: string
-    bio?: string
+    dateOfBirth?: string
   }): Promise<void> {
     const payload: Record<string, unknown> = {}
-    const fields = ['firstName','lastName','middleName','prefix','suffix','nickname','employer','occupation','website','bio'] as const
+    const fields = ['firstName','lastName','middleName','suffix','employer','occupation','dateOfBirth'] as const
     for (const f of fields) {
       if (data[f] !== undefined) payload[f] = data[f]
     }
-    await this.request<void>('PATCH', `/people/${vanId}`, payload)
+    await this.request<void>('POST', `/people/${vanId}`, payload)
   }
 
   async addEmail(vanId: number, email: string, isPrimary = false): Promise<void> {
-    await this.request<void>('POST', `/people/${vanId}/emails`, {
-      email,
-      isPrimary,
+    await this.request<void>('POST', `/people/${vanId}`, {
+      emails: [{ email, isPreferred: isPrimary }],
     })
   }
 
   async addPhone(vanId: number, phoneNumber: string, phoneType = 'C', isPrimary = false): Promise<void> {
-    await this.request<void>('POST', `/people/${vanId}/phones`, {
-      phoneNumber,
-      phoneType,
-      isPreferred: isPrimary,
+    await this.request<void>('POST', `/people/${vanId}`, {
+      phones: [{ phoneNumber, phoneType, isPreferred: isPrimary }],
     })
   }
 
@@ -609,25 +613,38 @@ export class EAClient {
     zipOrPostalCode?: string
     isPrimary?: boolean
   }): Promise<void> {
-    await this.request<void>('POST', `/people/${vanId}/addresses`, {
-      ...address,
-      isPrimary: address.isPrimary ?? false,
+    const { isPrimary, ...rest } = address
+    await this.request<void>('POST', `/people/${vanId}`, {
+      addresses: [{ ...rest, isPreferred: isPrimary ?? false }],
     })
   }
 
+  /**
+   * Apply an activist code via a manual canvass response. This is EveryAction's
+   * documented path for tagging a person with an activist code; /people/{vanId}/codes
+   * is for the separate Code/Tag/SourceCode id space, not activist codes.
+   */
   async applyActivistCode(vanId: number, activistCodeId: number): Promise<void> {
-    await this.request<void>('POST', `/people/${vanId}/activistCodes`, {
-      activistCodeId,
-      action: 'Apply',
+    await this.request<void>('POST', `/people/${vanId}/canvassResponses`, {
+      canvassContext: { inputTypeId: INPUT_TYPE_MANUAL },
+      responses: [{ type: 'ActivistCode', action: 'Apply', activistCodeId }],
     })
   }
 
   async removeActivistCode(vanId: number, activistCodeId: number): Promise<void> {
-    await this.request<void>('DELETE', `/people/${vanId}/activistCodes/${activistCodeId}`, undefined)
+    await this.request<void>('POST', `/people/${vanId}/canvassResponses`, {
+      canvassContext: { inputTypeId: INPUT_TYPE_MANUAL },
+      responses: [{ type: 'ActivistCode', action: 'Remove', activistCodeId }],
+    })
   }
 
   async listContactActivistCodes(vanId: number): Promise<{ items: Array<{ activistCodeId: number; activistCodeName: string; dateCreated?: string }> }> {
     return this.request('GET', `/people/${vanId}/activistCodes`)
+  }
+
+  /** Merge sourceVanId INTO targetVanId. The source record (URL) is deleted; the target (body) survives. */
+  async mergeInto(sourceVanId: number, targetVanId: number): Promise<void> {
+    await this.request<void>('PUT', `/people/${sourceVanId}/mergeInto`, { vanId: targetVanId })
   }
 
   async listCustomFields(): Promise<{ items: EACustomField[] }> {
@@ -635,13 +652,15 @@ export class EAClient {
   }
 
   async getCustomFieldValues(vanId: number): Promise<{ items: EACustomFieldValue[] }> {
-    return this.request<{ items: EACustomFieldValue[] }>('GET', `/people/${vanId}/customFields`)
+    const person = await this.request<{ customFieldValues?: EACustomFieldValue[] }>(
+      'GET', `/people/${vanId}`, undefined, { $expand: 'customFields' }
+    )
+    return { items: person.customFieldValues ?? [] }
   }
 
   async setCustomField(vanId: number, customFieldId: number, value: string): Promise<void> {
-    await this.request<void>('POST', `/people/${vanId}/customFields`, {
-      customFieldId,
-      assignedValue: value,
+    await this.request<void>('POST', `/people/${vanId}`, {
+      customFieldValues: [{ customFieldId, assignedValue: value }],
     })
   }
 

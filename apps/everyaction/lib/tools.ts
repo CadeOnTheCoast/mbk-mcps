@@ -214,7 +214,8 @@ export const TOOLS: McpTool[] = [
   },
   {
     name: "ea_update_contact",
-    description: "Update structured fields on an existing contact: name parts, employer, title/occupation, prefix, suffix, nickname, website, bio. Use ea_add_contact_email / ea_add_contact_phone / ea_update_contact_address for those sub-objects.",
+    description:
+      "Update structured fields on an existing contact: name parts, employer, title/occupation, suffix, date of birth. Use ea_add_contact_email / ea_add_contact_phone / ea_update_contact_address for contact info. NOTE: EveryAction's freeform 'Biography' panel is NOT writable via the API — put biographical narrative in a note via ea_log_note instead.",
     inputSchema: {
       type: "object",
       properties: {
@@ -222,15 +223,25 @@ export const TOOLS: McpTool[] = [
         firstName: { type: "string" },
         lastName: { type: "string" },
         middleName: { type: "string" },
-        prefix: { type: "string", description: "e.g. Dr., Hon., Rep." },
         suffix: { type: "string", description: "e.g. Jr., Sr., III" },
-        nickname: { type: "string" },
         employer: { type: "string" },
         occupation: { type: "string", description: "Job title / role" },
-        website: { type: "string" },
-        bio: { type: "string", description: "Free-text biography" },
+        dateOfBirth: { type: "string", description: "ISO date (YYYY-MM-DD)" },
       },
       required: ["vanId"],
+    },
+  },
+  {
+    name: "ea_merge_contacts",
+    description:
+      "Merge a duplicate contact into the record you want to keep. The source record is permanently deleted and its history moves to the surviving record. Use this to clean up duplicates.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        sourceVanId: { type: "number", description: "The duplicate to delete (its data merges into the keeper)" },
+        keepVanId: { type: "number", description: "The record that survives" },
+      },
+      required: ["sourceVanId", "keepVanId"],
     },
   },
   {
@@ -555,7 +566,7 @@ export async function callTool(
 
       case "ea_update_contact": {
         const vanId = args.vanId as number;
-        const fields = ["firstName","lastName","middleName","prefix","suffix","nickname","employer","occupation","website","bio"] as const;
+        const fields = ["firstName","lastName","middleName","suffix","employer","occupation","dateOfBirth"] as const;
         const updates: Record<string, string> = {};
         for (const f of fields) {
           if (args[f] !== undefined) updates[f] = args[f] as string;
@@ -563,6 +574,14 @@ export async function callTool(
         if (!Object.keys(updates).length) return err("Provide at least one field to update.");
         await client.updatePerson(vanId, updates);
         return ok(`Updated VAN ${vanId}: ${Object.entries(updates).map(([k,v]) => `${k}="${v}"`).join(", ")}`);
+      }
+
+      case "ea_merge_contacts": {
+        const sourceVanId = args.sourceVanId as number;
+        const keepVanId = args.keepVanId as number;
+        if (sourceVanId === keepVanId) return err("sourceVanId and keepVanId must differ.");
+        await client.mergeInto(sourceVanId, keepVanId);
+        return ok(`Merged VAN ${sourceVanId} into VAN ${keepVanId}. VAN ${sourceVanId} is now deleted; its history lives on VAN ${keepVanId}.`);
       }
 
       case "ea_add_contact_email": {
