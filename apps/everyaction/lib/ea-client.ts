@@ -123,6 +123,12 @@ export interface EAContactType {
   contactTypeName?: string | null
 }
 
+export interface EAInputType {
+  inputTypeId: number
+  name?: string | null
+  inputTypeName?: string | null
+}
+
 export interface EAInteraction {
   contactId?: number
   dateCanvassed?: string
@@ -150,6 +156,8 @@ export const DEFAULT_CONTACT_TYPES = {
 } as const
 
 const INPUT_TYPE_MANUAL = 11
+// EveryAction's "API" input type. contactHistory.inputTypeId defaults to this.
+const DEFAULT_INPUT_TYPE_API = 11
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -450,20 +458,40 @@ export class EAClient {
 
   async logContactFull(vanId: number, params: {
     contactTypeId: number
+    contactTypeLabel?: string
     dateCanvassed?: string
     resultCodeId?: number | null
     noteText?: string
     noteCategoryId?: number
     isViewRestricted?: boolean
   }): Promise<EANote> {
+    // contactHistory.inputTypeId defaults to 11 (API). If the contact type
+    // isn't enabled for API input, the write fails — so resolve a compatible
+    // input type up front and fail with a clear message if none exists.
+    const inputTypeId = await this.resolveInputTypeForContactType(params.contactTypeId)
+    if (inputTypeId == null) {
+      const label = params.contactTypeLabel ?? `contact type ${params.contactTypeId}`
+      throw new Error(
+        `The "${label}" contact type is not enabled for any input type usable via the API. ` +
+        `In EveryAction, enable this contact type for the "API" input type (Administration > ` +
+        `Contact Types), or choose a contact type that is API-enabled.`
+      )
+    }
+
     const contactHistory: Record<string, unknown> = {
       contactTypeId: params.contactTypeId,
+      inputTypeId,
       dateCanvassed: params.dateCanvassed ?? new Date().toISOString().split('T')[0],
     }
     if (params.resultCodeId != null) contactHistory.resultCodeId = params.resultCodeId
 
+    // EveryAction requires non-empty note text.
+    const text = params.noteText?.trim()
+      ? params.noteText
+      : `${params.contactTypeLabel ?? 'Contact'} logged`
+
     const payload: Record<string, unknown> = {
-      text: params.noteText ?? '',
+      text,
       isViewRestricted: params.isViewRestricted ?? false,
       contactHistory,
     }
@@ -539,10 +567,49 @@ export class EAClient {
     )
   }
 
-  async listContactTypes(): Promise<{ items: EAContactType[]; count: number }> {
+  async listContactTypes(inputTypeId?: number): Promise<{ items: EAContactType[]; count: number }> {
     // /canvassResponses/contactTypes returns a bare array, not a paginated envelope.
-    const raw = await this.request<unknown>('GET', '/canvassResponses/contactTypes')
+    // Pass inputTypeId to get only the contact types valid for that input type.
+    const params = inputTypeId != null ? { inputTypeId: String(inputTypeId) } : undefined
+    const raw = await this.request<unknown>('GET', '/canvassResponses/contactTypes', undefined, params)
     return asItems<EAContactType>(raw)
+  }
+
+  async listInputTypes(): Promise<{ items: EAInputType[]; count: number }> {
+    // /canvassResponses/inputTypes returns a bare array, not a paginated envelope.
+    const raw = await this.request<unknown>('GET', '/canvassResponses/inputTypes')
+    return asItems<EAInputType>(raw)
+  }
+
+  /**
+   * Find an input type that the given contact type is valid for, so a contact
+   * history write doesn't fail with "contactTypeId not valid for the input
+   * type". contactHistory defaults inputTypeId to 11 (API), so we try that
+   * first, then fall back to scanning every input type.
+   */
+  async resolveInputTypeForContactType(contactTypeId: number): Promise<number | undefined> {
+    const supports = async (inputTypeId: number) => {
+      try {
+        const { items } = await this.listContactTypes(inputTypeId)
+        return items.some((c) => c.contactTypeId === contactTypeId)
+      } catch {
+        return false
+      }
+    }
+
+    if (await supports(DEFAULT_INPUT_TYPE_API)) return DEFAULT_INPUT_TYPE_API
+
+    let inputTypes: EAInputType[] = []
+    try {
+      inputTypes = (await this.listInputTypes()).items
+    } catch {
+      return undefined
+    }
+    for (const it of inputTypes) {
+      if (it.inputTypeId == null || it.inputTypeId === DEFAULT_INPUT_TYPE_API) continue
+      if (await supports(it.inputTypeId)) return it.inputTypeId
+    }
+    return undefined
   }
 
   async findActivistCodeByName(name: string): Promise<EAActivistCode | null> {

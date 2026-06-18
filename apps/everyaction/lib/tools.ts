@@ -563,6 +563,7 @@ export async function callTool(
         // so it shows as a typed interaction AND is readable via ea_get_interaction_history.
         const saved = await client.logContactFull(vanId, {
           contactTypeId: ct.contactTypeId,
+          contactTypeLabel: label,
           dateCanvassed: date,
           resultCodeId,
           noteText: note,
