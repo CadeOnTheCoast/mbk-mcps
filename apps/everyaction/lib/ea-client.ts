@@ -84,6 +84,13 @@ export interface EAContact {
   resultCodeId?: number | null
 }
 
+export interface EAContactHistory {
+  contactTypeId?: number
+  dateCanvassed?: string
+  inputTypeId?: number
+  resultCodeId?: number | null
+}
+
 export interface EANote {
   noteId?: number
   text: string
@@ -91,6 +98,8 @@ export interface EANote {
   createdByName?: string
   dateCreated?: string   // legacy field name (may not be returned)
   createdDate?: string   // EA actually returns this casing
+  category?: { noteCategoryId?: number; name?: string | null } | null
+  contactHistory?: EAContactHistory | null
 }
 
 export interface EAFindResult {
@@ -416,20 +425,27 @@ export class EAClient {
   }
 
   /**
-   * Record a contact/interaction in a person's contact history.
+   * Record an interaction in a person's contact history.
    *
-   * EveryAction has no /people/{vanId}/contacts endpoint — a contact is logged
-   * as a canvass response. The contact type and date live in `canvassContext`;
-   * `resultCodeId` is optional. Free-text notes are NOT part of a canvass
-   * response — log those separately via addNote().
+   * This mirrors EveryAction's "Add contact history" UI form: a Note carries
+   * the narrative (text, category, view restriction) AND an attached
+   * `contactHistory` object that gives it a contact type + date — which is what
+   * makes it show up as a typed interaction (e.g. "Meeting") rather than a
+   * plain note. Because it's stored as a note, it is also readable back via
+   * GET /people/{vanId}/notes (canvassResponses are write-only).
+   *
+   * inputTypeId is intentionally omitted: the UI form has no input-type field
+   * and EveryAction assigns it server-side. Forcing inputTypeId is what made
+   * the earlier /canvassResponses attempts fail with "contactTypeId not valid
+   * for the input type provided".
    */
   async logContact(
     vanId: number,
     contactTypeId: number,
-    _noteText?: string,
+    noteText?: string,
     dateCanvassed?: string
   ): Promise<void> {
-    await this.logContactFull(vanId, { contactTypeId, dateCanvassed })
+    await this.logContactFull(vanId, { contactTypeId, dateCanvassed, noteText })
   }
 
   async logContactFull(vanId: number, params: {
@@ -437,25 +453,56 @@ export class EAClient {
     dateCanvassed?: string
     resultCodeId?: number | null
     noteText?: string
-  }): Promise<void> {
+    noteCategoryId?: number
+    isViewRestricted?: boolean
+  }): Promise<EANote> {
+    const contactHistory: Record<string, unknown> = {
+      contactTypeId: params.contactTypeId,
+      dateCanvassed: params.dateCanvassed ?? new Date().toISOString().split('T')[0],
+    }
+    if (params.resultCodeId != null) contactHistory.resultCodeId = params.resultCodeId
+
     const payload: Record<string, unknown> = {
-      canvassContext: {
-        contactTypeId: params.contactTypeId,
-        inputTypeId: INPUT_TYPE_MANUAL,
-        dateCanvassed: params.dateCanvassed ?? new Date().toISOString().split('T')[0],
-      },
+      text: params.noteText ?? '',
+      isViewRestricted: params.isViewRestricted ?? false,
+      contactHistory,
     }
-    if (params.resultCodeId != null) {
-      payload.resultCodeId = params.resultCodeId
-    }
-    await this.request<void>('POST', `/people/${vanId}/canvassResponses`, payload)
+    if (params.noteCategoryId != null) payload.category = { noteCategoryId: params.noteCategoryId }
+
+    return this.request<EANote>('POST', `/people/${vanId}/notes`, payload)
   }
 
+  /**
+   * Interaction history = the person's notes that carry a contactHistory
+   * attribute (i.e. were logged as contact history, not free-form notes).
+   * Contact-type names are resolved so callers see "Meeting" rather than an id.
+   */
   async getInteractions(vanId: number): Promise<{ items: EAInteraction[]; count: number }> {
-    return this.request<{ items: EAInteraction[]; count: number }>(
-      'GET', `/people/${vanId}/contacts`, undefined,
-      { $top: '25', $orderby: 'dateCanvassed desc' }
-    )
+    const [notes, types] = await Promise.all([
+      this.getNotes(vanId),
+      this.listContactTypes().catch(() => ({ items: [] as EAContactType[], count: 0 })),
+    ])
+    const typeName = new Map<number, string>()
+    for (const t of types.items) {
+      const label = t.name ?? t.contactTypeName
+      if (t.contactTypeId != null && label) typeName.set(t.contactTypeId, label)
+    }
+
+    const items: EAInteraction[] = notes.items
+      .filter((n) => n.contactHistory && n.contactHistory.contactTypeId != null)
+      .map((n) => {
+        const ch = n.contactHistory!
+        return {
+          dateCanvassed: ch.dateCanvassed ?? n.createdDate ?? n.dateCreated,
+          contactTypeId: ch.contactTypeId,
+          contactTypeName: ch.contactTypeId != null ? typeName.get(ch.contactTypeId) ?? null : null,
+          resultCodeId: ch.resultCodeId ?? null,
+          notes: n.text ? [{ text: n.text }] : [],
+          createdByName: n.createdByName ?? null,
+        }
+      })
+
+    return { items, count: items.length }
   }
 
   async listResultCodes(contactTypeId?: number): Promise<{ items: EAResultCode[]; count: number }> {

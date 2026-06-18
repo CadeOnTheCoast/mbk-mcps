@@ -558,10 +558,21 @@ export async function callTool(
         const ct = await client.findContactTypeByName(contactTypeName);
         if (!ct) return err(`Contact type "${contactTypeName}" not found. Run ea_list_contact_types to see options.`);
 
-        await client.logContactFull(vanId, { contactTypeId: ct.contactTypeId, dateCanvassed: date, resultCodeId, noteText: note });
-        if (note) await client.addNote(vanId, `[${ct.name ?? ct.contactTypeName}] ${note}`);
+        const label = ct.name ?? ct.contactTypeName ?? contactTypeName;
+        // Logged as contact history (a note carrying a contactHistory attribute),
+        // so it shows as a typed interaction AND is readable via ea_get_interaction_history.
+        const saved = await client.logContactFull(vanId, {
+          contactTypeId: ct.contactTypeId,
+          dateCanvassed: date,
+          resultCodeId,
+          noteText: note,
+        });
 
-        return ok(`Logged "${ct.name ?? ct.contactTypeName}" on VAN ${vanId}${date ? ` (${date})` : " (today)"}.`);
+        return ok(
+          `Logged "${label}" contact history on VAN ${vanId}${date ? ` (${date})` : " (today)"}.` +
+          `${saved?.noteId ? `\nEntry ID: ${saved.noteId}` : ""}` +
+          `${note ? `\nNote: "${note.slice(0, 120)}${note.length > 120 ? "..." : ""}"` : ""}`
+        );
       }
 
       case "ea_update_contact": {
