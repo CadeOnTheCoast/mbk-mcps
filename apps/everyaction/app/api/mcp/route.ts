@@ -41,6 +41,7 @@ function getClient(): EAClient {
     apiKey,
     appName,
     mode: process.env.EVERYACTION_MODE ?? "1",
+    baseUrl: process.env.EVERYACTION_BASE_URL,
   });
 }
 

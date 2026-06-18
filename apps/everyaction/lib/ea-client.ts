@@ -187,7 +187,7 @@ export class EAClient {
   }
 
   constructor(config: EAClientConfig) {
-    this.baseUrl = (config.baseUrl ?? 'https://api.everyaction.com').replace(/\/$/, '')
+    this.baseUrl = (config.baseUrl ?? 'https://api.securevan.com').replace(/\/$/, '')
     const password = `${config.apiKey}|${config.mode ?? '1'}`
     this.authHeader = 'Basic ' + Buffer.from(`${config.appName}:${password}`).toString('base64')
     this.fetchImpl = config.fetchImpl ?? fetch
