@@ -1,4 +1,4 @@
-import { EAClient, EAInteraction } from "./ea-client";
+import { EAClient, EACustomField, EACustomFieldValue, EAInteraction } from "./ea-client";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -213,6 +213,143 @@ export const TOOLS: McpTool[] = [
     },
   },
   {
+    name: "ea_update_contact",
+    description: "Update structured fields on an existing contact: name parts, employer, title/occupation, prefix, suffix, nickname, website, bio. Use ea_add_contact_email / ea_add_contact_phone / ea_update_contact_address for those sub-objects.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        vanId: { type: "number" },
+        firstName: { type: "string" },
+        lastName: { type: "string" },
+        middleName: { type: "string" },
+        prefix: { type: "string", description: "e.g. Dr., Hon., Rep." },
+        suffix: { type: "string", description: "e.g. Jr., Sr., III" },
+        nickname: { type: "string" },
+        employer: { type: "string" },
+        occupation: { type: "string", description: "Job title / role" },
+        website: { type: "string" },
+        bio: { type: "string", description: "Free-text biography" },
+      },
+      required: ["vanId"],
+    },
+  },
+  {
+    name: "ea_add_contact_email",
+    description: "Add an email address to a contact record.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        vanId: { type: "number" },
+        email: { type: "string" },
+        isPrimary: { type: "boolean", description: "Mark as primary email (default false)" },
+      },
+      required: ["vanId", "email"],
+    },
+  },
+  {
+    name: "ea_add_contact_phone",
+    description: "Add a phone number to a contact record.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        vanId: { type: "number" },
+        phoneNumber: { type: "string" },
+        phoneType: { type: "string", description: "C=Cell, H=Home, W=Work, M=Mobile (default C)" },
+        isPrimary: { type: "boolean" },
+      },
+      required: ["vanId", "phoneNumber"],
+    },
+  },
+  {
+    name: "ea_update_contact_address",
+    description: "Add or update a mailing address on a contact record.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        vanId: { type: "number" },
+        addressLine1: { type: "string" },
+        addressLine2: { type: "string" },
+        city: { type: "string" },
+        stateOrProvince: { type: "string", description: "Two-letter state abbreviation" },
+        zipOrPostalCode: { type: "string" },
+        isPrimary: { type: "boolean" },
+      },
+      required: ["vanId", "addressLine1"],
+    },
+  },
+  {
+    name: "ea_apply_activist_code",
+    description: "Apply (tag) an activist code to a contact. Use ea_list_activist_codes to find code names/IDs.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        vanId: { type: "number" },
+        activistCodeId: { type: "number" },
+        activistCodeName: { type: "string", description: "Name to resolve if ID not known" },
+      },
+      required: ["vanId"],
+    },
+  },
+  {
+    name: "ea_remove_activist_code",
+    description: "Remove (untag) an activist code from a contact.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        vanId: { type: "number" },
+        activistCodeId: { type: "number" },
+        activistCodeName: { type: "string" },
+      },
+      required: ["vanId"],
+    },
+  },
+  {
+    name: "ea_list_contact_activist_codes",
+    description: "List all activist codes (tags) currently applied to a contact.",
+    inputSchema: {
+      type: "object",
+      properties: { vanId: { type: "number" } },
+      required: ["vanId"],
+    },
+  },
+  {
+    name: "ea_list_custom_fields",
+    description: "List all custom fields defined in this EveryAction organization (e.g. Bio, Notes, custom attributes). Use this to find customFieldId values before calling ea_set_custom_field.",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "ea_get_custom_field_values",
+    description: "Get all custom field values set on a contact record.",
+    inputSchema: {
+      type: "object",
+      properties: { vanId: { type: "number" } },
+      required: ["vanId"],
+    },
+  },
+  {
+    name: "ea_set_custom_field",
+    description: "Set a custom field value on a contact (e.g. Bio, any org-defined attribute). Run ea_list_custom_fields first to find the right customFieldId.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        vanId: { type: "number" },
+        customFieldId: { type: "number" },
+        customFieldName: { type: "string", description: "Name to resolve if ID not known" },
+        value: { type: "string" },
+      },
+      required: ["vanId", "value"],
+    },
+  },
+  {
+    name: "ea_get_contact_full",
+    description: "Get a complete contact record: core fields, all emails/phones/addresses, activist codes, and custom field values in one call.",
+    inputSchema: {
+      type: "object",
+      properties: { vanId: { type: "number" } },
+      required: ["vanId"],
+    },
+  },
+  {
     name: "ea_get_portfolio_summary",
     description: "Summarize a donor portfolio by activist code or explicit VAN IDs.",
     inputSchema: {
@@ -414,6 +551,195 @@ export async function callTool(
         if (note) await client.addNote(vanId, `[${ct.name ?? ct.contactTypeName}] ${note}`);
 
         return ok(`Logged "${ct.name ?? ct.contactTypeName}" on VAN ${vanId}${date ? ` (${date})` : " (today)"}.`);
+      }
+
+      case "ea_update_contact": {
+        const vanId = args.vanId as number;
+        const fields = ["firstName","lastName","middleName","prefix","suffix","nickname","employer","occupation","website","bio"] as const;
+        const updates: Record<string, string> = {};
+        for (const f of fields) {
+          if (args[f] !== undefined) updates[f] = args[f] as string;
+        }
+        if (!Object.keys(updates).length) return err("Provide at least one field to update.");
+        await client.updatePerson(vanId, updates);
+        return ok(`Updated VAN ${vanId}: ${Object.entries(updates).map(([k,v]) => `${k}="${v}"`).join(", ")}`);
+      }
+
+      case "ea_add_contact_email": {
+        const vanId = args.vanId as number;
+        const email = args.email as string;
+        const isPrimary = (args.isPrimary as boolean | undefined) ?? false;
+        await client.addEmail(vanId, email, isPrimary);
+        return ok(`Added email "${email}" to VAN ${vanId}${isPrimary ? " (set as primary)" : ""}.`);
+      }
+
+      case "ea_add_contact_phone": {
+        const vanId = args.vanId as number;
+        const phoneNumber = args.phoneNumber as string;
+        const phoneType = (args.phoneType as string | undefined) ?? "C";
+        const isPrimary = (args.isPrimary as boolean | undefined) ?? false;
+        await client.addPhone(vanId, phoneNumber, phoneType, isPrimary);
+        return ok(`Added phone "${phoneNumber}" (${phoneType}) to VAN ${vanId}.`);
+      }
+
+      case "ea_update_contact_address": {
+        const vanId = args.vanId as number;
+        await client.addAddress(vanId, {
+          addressLine1: args.addressLine1 as string,
+          addressLine2: args.addressLine2 as string | undefined,
+          city: args.city as string | undefined,
+          stateOrProvince: args.stateOrProvince as string | undefined,
+          zipOrPostalCode: args.zipOrPostalCode as string | undefined,
+          isPrimary: (args.isPrimary as boolean | undefined) ?? false,
+        });
+        const parts = [args.addressLine1, args.city, args.stateOrProvince, args.zipOrPostalCode].filter(Boolean);
+        return ok(`Added address "${parts.join(", ")}" to VAN ${vanId}.`);
+      }
+
+      case "ea_apply_activist_code": {
+        const vanId = args.vanId as number;
+        let codeId = args.activistCodeId as number | undefined;
+        let codeName = args.activistCodeName as string | undefined;
+        if (!codeId) {
+          if (!codeName) return err("Provide activistCodeId or activistCodeName.");
+          const code = await client.findActivistCodeByName(codeName);
+          if (!code) return err(`No activist code matched "${codeName}". Run ea_list_activist_codes to see options.`);
+          codeId = code.activistCodeId;
+          codeName = code.name ?? code.activistCodeName ?? codeName;
+        }
+        await client.applyActivistCode(vanId, codeId);
+        return ok(`Applied activist code "${codeName ?? codeId}" (ID ${codeId}) to VAN ${vanId}.`);
+      }
+
+      case "ea_remove_activist_code": {
+        const vanId = args.vanId as number;
+        let codeId = args.activistCodeId as number | undefined;
+        const codeName = args.activistCodeName as string | undefined;
+        if (!codeId) {
+          if (!codeName) return err("Provide activistCodeId or activistCodeName.");
+          const code = await client.findActivistCodeByName(codeName);
+          if (!code) return err(`No activist code matched "${codeName}".`);
+          codeId = code.activistCodeId;
+        }
+        await client.removeActivistCode(vanId, codeId);
+        return ok(`Removed activist code ${codeId} from VAN ${vanId}.`);
+      }
+
+      case "ea_list_contact_activist_codes": {
+        const vanId = args.vanId as number;
+        const result = await client.listContactActivistCodes(vanId);
+        const items = result.items ?? [];
+        if (!items.length) return ok(`VAN ${vanId} has no activist codes applied.`);
+        return ok(`Activist codes on VAN ${vanId}:\n${items.map((c) => `  ${c.activistCodeId}: ${c.activistCodeName}`).join("\n")}`);
+      }
+
+      case "ea_list_custom_fields": {
+        const result = await client.listCustomFields();
+        const items = result.items ?? [];
+        if (!items.length) return ok("No custom fields defined in this organization.");
+        const format = (f: EACustomField) => {
+          const name = f.name ?? f.customFieldName ?? "(unnamed)";
+          const type = f.type ? ` [${f.type}]` : "";
+          const values = f.availableValues?.length
+            ? `\n    Options: ${f.availableValues.map((v) => `${v.id}=${v.name}`).join(", ")}`
+            : "";
+          return `  ${f.customFieldId}: ${name}${type}${values}`;
+        };
+        return ok(`Custom fields (${items.length}):\n${items.map(format).join("\n")}`);
+      }
+
+      case "ea_get_custom_field_values": {
+        const vanId = args.vanId as number;
+        const result = await client.getCustomFieldValues(vanId);
+        const items = result.items ?? [];
+        if (!items.length) return ok(`No custom field values set on VAN ${vanId}.`);
+        const fieldDefs = (await client.listCustomFields()).items ?? [];
+        const nameMap = new Map(fieldDefs.map((f) => [f.customFieldId, f.name ?? f.customFieldName ?? String(f.customFieldId)]));
+        const format = (v: EACustomFieldValue) => {
+          const name = nameMap.get(v.customFieldId) ?? String(v.customFieldId);
+          return `  ${name} (${v.customFieldId}): ${v.assignedValue ?? "(empty)"}`;
+        };
+        return ok(`Custom fields on VAN ${vanId}:\n${items.map(format).join("\n")}`);
+      }
+
+      case "ea_set_custom_field": {
+        const vanId = args.vanId as number;
+        const value = args.value as string;
+        let fieldId = args.customFieldId as number | undefined;
+        const fieldName = args.customFieldName as string | undefined;
+        if (!fieldId) {
+          if (!fieldName) return err("Provide customFieldId or customFieldName. Run ea_list_custom_fields to discover options.");
+          const allFields = (await client.listCustomFields()).items ?? [];
+          const needle = fieldName.trim().toLowerCase();
+          const match = allFields.find((f) => (f.name ?? f.customFieldName ?? "").toLowerCase() === needle)
+            ?? allFields.find((f) => (f.name ?? f.customFieldName ?? "").toLowerCase().includes(needle));
+          if (!match) return err(`No custom field matched "${fieldName}". Run ea_list_custom_fields to see options.`);
+          fieldId = match.customFieldId;
+        }
+        await client.setCustomField(vanId, fieldId, value);
+        return ok(`Set custom field ${fieldId} on VAN ${vanId}.`);
+      }
+
+      case "ea_get_contact_full": {
+        const vanId = args.vanId as number;
+        const [person, notes, activistCodes, customFields] = await Promise.allSettled([
+          client.getPerson(vanId),
+          client.getNotes(vanId),
+          client.listContactActivistCodes(vanId),
+          client.getCustomFieldValues(vanId),
+        ]);
+
+        if (person.status === "rejected") return err(`Could not load VAN ${vanId}: ${person.reason}`);
+        const p = person.value;
+
+        const lines: string[] = [];
+        const name = [p.prefix, p.firstName, p.middleName, p.lastName, p.suffix].filter(Boolean).join(" ") || "(no name)";
+        lines.push(`=== ${name} | VAN ${vanId} ===`);
+        if (p.nickname) lines.push(`  Nickname: ${p.nickname}`);
+        if (p.employer) lines.push(`  Employer: ${p.employer}`);
+        if (p.occupation) lines.push(`  Title: ${p.occupation}`);
+        if (p.website) lines.push(`  Website: ${p.website}`);
+        if (p.bio) lines.push(`  Bio: ${p.bio}`);
+
+        if (p.emails?.length) {
+          lines.push("\nEmails:");
+          p.emails.forEach((e) => lines.push(`  ${e.email}${e.isPrimary ? " (primary)" : ""}`));
+        }
+        if (p.phones?.length) {
+          lines.push("\nPhones:");
+          p.phones.forEach((ph) => lines.push(`  ${ph.phoneNumber} (${ph.phoneType})${ph.isPrimary ? " (primary)" : ""}`));
+        }
+        if (p.addresses?.length) {
+          lines.push("\nAddresses:");
+          p.addresses.forEach((a) => {
+            const addr = [a.addressLine1, a.city, a.stateOrProvince, a.zipOrPostalCode].filter(Boolean).join(", ");
+            lines.push(`  ${addr}${a.isPrimary ? " (primary)" : ""}`);
+          });
+        }
+
+        if (activistCodes.status === "fulfilled" && activistCodes.value.items?.length) {
+          lines.push("\nActivist Codes:");
+          activistCodes.value.items.forEach((c) => lines.push(`  ${c.activistCodeId}: ${c.activistCodeName}`));
+        }
+
+        if (customFields.status === "fulfilled" && customFields.value.items?.length) {
+          const cfItems = customFields.value.items;
+          let fieldDefs: Array<{ customFieldId: number; name?: string | null; customFieldName?: string | null }> = [];
+          try { fieldDefs = (await client.listCustomFields()).items ?? []; } catch { /* non-fatal */ }
+          const nameMap = new Map(fieldDefs.map((f) => [f.customFieldId, f.name ?? f.customFieldName ?? String(f.customFieldId)]));
+          lines.push("\nCustom Fields:");
+          cfItems.forEach((v) => {
+            const label = nameMap.get(v.customFieldId) ?? String(v.customFieldId);
+            lines.push(`  ${label}: ${v.assignedValue ?? "(empty)"}`);
+          });
+        }
+
+        if (notes.status === "fulfilled" && notes.value.items?.length) {
+          lines.push("\nRecent Notes:");
+          notes.value.items.slice(0, 5).forEach((n) => lines.push(formatNote(n)));
+        }
+
+        return ok(lines.join("\n"));
       }
 
       case "ea_find_or_create_contact": {

@@ -41,10 +41,15 @@ export interface EAPerson {
   vanId: number
   firstName: string | null
   lastName: string | null
-  emails?: Array<{ email: string; isPrimary: boolean }>
-  phones?: Array<{ phoneNumber: string; phoneType: string }>
+  middleName?: string | null
+  prefix?: string | null
+  suffix?: string | null
+  nickname?: string | null
+  emails?: Array<{ email: string; isPrimary: boolean; type?: string }>
+  phones?: Array<{ phoneNumber: string; phoneType: string; isPrimary?: boolean }>
   addresses?: Array<{
     addressLine1: string | null
+    addressLine2?: string | null
     city: string | null
     stateOrProvince: string | null
     zipOrPostalCode: string | null
@@ -52,6 +57,23 @@ export interface EAPerson {
   }>
   employer?: string | null
   occupation?: string | null
+  website?: string | null
+  bio?: string | null
+}
+
+export interface EACustomField {
+  customFieldId: number
+  customFieldGroupId?: number
+  name?: string | null
+  customFieldName?: string | null
+  type?: string | null
+  availableValues?: Array<{ id: number; name: string }>
+}
+
+export interface EACustomFieldValue {
+  customFieldId: number
+  customFieldGroupId?: number
+  assignedValue?: string | null
 }
 
 export interface EAContact {
@@ -542,6 +564,85 @@ export class EAClient {
       this.getNotes(vanId),
     ])
     return { person, recentNotes: notes.items.slice(0, 5) }
+  }
+
+  async updatePerson(vanId: number, data: {
+    firstName?: string
+    lastName?: string
+    middleName?: string
+    prefix?: string
+    suffix?: string
+    nickname?: string
+    employer?: string
+    occupation?: string
+    website?: string
+    bio?: string
+  }): Promise<void> {
+    const payload: Record<string, unknown> = {}
+    const fields = ['firstName','lastName','middleName','prefix','suffix','nickname','employer','occupation','website','bio'] as const
+    for (const f of fields) {
+      if (data[f] !== undefined) payload[f] = data[f]
+    }
+    await this.request<void>('PATCH', `/people/${vanId}`, payload)
+  }
+
+  async addEmail(vanId: number, email: string, isPrimary = false): Promise<void> {
+    await this.request<void>('POST', `/people/${vanId}/emails`, {
+      email,
+      isPrimary,
+    })
+  }
+
+  async addPhone(vanId: number, phoneNumber: string, phoneType = 'C', isPrimary = false): Promise<void> {
+    await this.request<void>('POST', `/people/${vanId}/phones`, {
+      phoneNumber,
+      phoneType,
+      isPreferred: isPrimary,
+    })
+  }
+
+  async addAddress(vanId: number, address: {
+    addressLine1: string
+    addressLine2?: string
+    city?: string
+    stateOrProvince?: string
+    zipOrPostalCode?: string
+    isPrimary?: boolean
+  }): Promise<void> {
+    await this.request<void>('POST', `/people/${vanId}/addresses`, {
+      ...address,
+      isPrimary: address.isPrimary ?? false,
+    })
+  }
+
+  async applyActivistCode(vanId: number, activistCodeId: number): Promise<void> {
+    await this.request<void>('POST', `/people/${vanId}/activistCodes`, {
+      activistCodeId,
+      action: 'Apply',
+    })
+  }
+
+  async removeActivistCode(vanId: number, activistCodeId: number): Promise<void> {
+    await this.request<void>('DELETE', `/people/${vanId}/activistCodes/${activistCodeId}`, undefined)
+  }
+
+  async listContactActivistCodes(vanId: number): Promise<{ items: Array<{ activistCodeId: number; activistCodeName: string; dateCreated?: string }> }> {
+    return this.request('GET', `/people/${vanId}/activistCodes`)
+  }
+
+  async listCustomFields(): Promise<{ items: EACustomField[] }> {
+    return this.request<{ items: EACustomField[] }>('GET', '/customFields', undefined, { $top: '200' })
+  }
+
+  async getCustomFieldValues(vanId: number): Promise<{ items: EACustomFieldValue[] }> {
+    return this.request<{ items: EACustomFieldValue[] }>('GET', `/people/${vanId}/customFields`)
+  }
+
+  async setCustomField(vanId: number, customFieldId: number, value: string): Promise<void> {
+    await this.request<void>('POST', `/people/${vanId}/customFields`, {
+      customFieldId,
+      assignedValue: value,
+    })
   }
 
   async upsertPerson(data: {
