@@ -415,24 +415,21 @@ export class EAClient {
     })
   }
 
+  /**
+   * Record a contact/interaction in a person's contact history.
+   *
+   * EveryAction has no /people/{vanId}/contacts endpoint — a contact is logged
+   * as a canvass response. The contact type and date live in `canvassContext`;
+   * `resultCodeId` is optional. Free-text notes are NOT part of a canvass
+   * response — log those separately via addNote().
+   */
   async logContact(
     vanId: number,
     contactTypeId: number,
-    noteText: string,
+    _noteText?: string,
     dateCanvassed?: string
   ): Promise<void> {
-    const payload: EAContact = {
-      dateCanvassed: dateCanvassed ?? new Date().toISOString().split('T')[0],
-      contactTypeId,
-      inputTypeId: INPUT_TYPE_MANUAL,
-      resultCodeId: null,
-    }
-
-    if (noteText) {
-      payload.notes = [{ text: noteText, isViewRestricted: false }]
-    }
-
-    await this.request<void>('POST', `/people/${vanId}/contacts`, payload)
+    await this.logContactFull(vanId, { contactTypeId, dateCanvassed })
   }
 
   async logContactFull(vanId: number, params: {
@@ -442,15 +439,16 @@ export class EAClient {
     noteText?: string
   }): Promise<void> {
     const payload: Record<string, unknown> = {
-      dateCanvassed: params.dateCanvassed ?? new Date().toISOString().split('T')[0],
-      contactTypeId: params.contactTypeId,
-      inputTypeId: INPUT_TYPE_MANUAL,
-      resultCodeId: params.resultCodeId ?? null,
+      canvassContext: {
+        contactTypeId: params.contactTypeId,
+        inputTypeId: INPUT_TYPE_MANUAL,
+        dateCanvassed: params.dateCanvassed ?? new Date().toISOString().split('T')[0],
+      },
     }
-    if (params.noteText) {
-      payload.notes = [{ text: params.noteText, isViewRestricted: false }]
+    if (params.resultCodeId != null) {
+      payload.resultCodeId = params.resultCodeId
     }
-    await this.request<void>('POST', `/people/${vanId}/contacts`, payload)
+    await this.request<void>('POST', `/people/${vanId}/canvassResponses`, payload)
   }
 
   async getInteractions(vanId: number): Promise<{ items: EAInteraction[]; count: number }> {
