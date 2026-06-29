@@ -33,6 +33,38 @@ function corsHeaders(): Record<string, string> {
   };
 }
 
+// Keys whose values are safe to log in the clear. Everything else (note
+// bodies, custom-field values, etc.) is reduced to a length so constituent
+// PII and meeting content never land in logs.
+const LOGGABLE_ARG_KEYS = new Set([
+  "vanId", "firstName", "lastName", "email", "phone", "query", "limit",
+  "contactTypeName", "contactTypeId", "date", "resultCodeId", "resultCodeName",
+  "activistCode", "activistCodeId", "customFieldId", "noteCategory",
+]);
+
+function redactArgs(args: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(args ?? {})) {
+    if (LOGGABLE_ARG_KEYS.has(k)) {
+      out[k] = typeof v === "string" && v.length > 60 ? `<${v.length} chars>` : v;
+    } else if (typeof v === "string") {
+      out[k] = `<${v.length} chars>`;
+    } else if (v != null) {
+      out[k] = "<redacted>";
+    }
+  }
+  return out;
+}
+
+function logEvent(evt: Record<string, unknown>) {
+  // One JSON line per event -> shows up in Vercel's Logs tab and `vercel logs`.
+  try {
+    console.log(JSON.stringify({ t: new Date().toISOString(), ...evt }));
+  } catch {
+    /* never let logging throw */
+  }
+}
+
 function getClient(): EAClient {
   const apiKey = process.env.EVERYACTION_API_KEY;
   const appName = process.env.EVERYACTION_APP_NAME;
@@ -61,7 +93,10 @@ export async function POST(req: Request) {
 
   const token = authHeader.slice(7);
   const expected = process.env.MCP_CLIENT_SECRET;
-  if (!expected || token !== expected) return unauthorized();
+  if (!expected || token !== expected) {
+    logEvent({ evt: "auth_rejected" });
+    return unauthorized();
+  }
 
   // ---------- parse JSON-RPC ----------
   let rpc: any;
@@ -95,14 +130,39 @@ export async function POST(req: Request) {
         const toolName = params?.name as string;
         const args = (params?.arguments ?? {}) as Record<string, unknown>;
         const client = getClient();
-        const result = await callTool(toolName, args, client);
-        return rpcOk(id, result);
+        const startedAt = Date.now();
+        try {
+          const result = await callTool(toolName, args, client);
+          // callTool returns { content: [...], isError? }; treat isError as a failed action.
+          const r = result as { isError?: boolean; content?: Array<{ text?: string }> };
+          const failed = r?.isError === true;
+          logEvent({
+            evt: "tool_call",
+            tool: toolName,
+            ok: !failed,
+            ms: Date.now() - startedAt,
+            args: redactArgs(args),
+            ...(failed ? { err: r.content?.[0]?.text?.slice(0, 300) ?? "error" } : {}),
+          });
+          return rpcOk(id, result);
+        } catch (e: any) {
+          logEvent({
+            evt: "tool_call",
+            tool: toolName,
+            ok: false,
+            ms: Date.now() - startedAt,
+            args: redactArgs(args),
+            err: e?.message ?? "error",
+          });
+          throw e;
+        }
       }
 
       default:
         return rpcError(id, -32601, `Method not found: ${method}`);
     }
   } catch (e: any) {
+    logEvent({ evt: "rpc_error", method, err: e?.message ?? "Internal error" });
     return rpcError(id, -32603, e?.message ?? "Internal error");
   }
 }
