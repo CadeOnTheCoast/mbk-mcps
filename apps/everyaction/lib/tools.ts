@@ -12,6 +12,11 @@ interface McpTool {
     properties: Record<string, unknown>;
     required?: string[];
   };
+  annotations?: {
+    readOnlyHint?: boolean;
+    destructiveHint?: boolean;
+    idempotentHint?: boolean;
+  };
 }
 
 interface ToolResult {
@@ -89,6 +94,7 @@ export const TOOLS: McpTool[] = [
     name: "ea_validate_connection",
     description: "Validate that the EveryAction credentials are working.",
     inputSchema: { type: "object", properties: {} },
+    annotations: { readOnlyHint: true, idempotentHint: true },
   },
   {
     name: "ea_list_activist_codes",
@@ -100,11 +106,13 @@ export const TOOLS: McpTool[] = [
         limit: { type: "number", description: "Max results (default 50)" },
       },
     },
+    annotations: { readOnlyHint: true, idempotentHint: true },
   },
   {
     name: "ea_list_contact_types",
     description: "List all EveryAction contact types (Phone, Meeting, Virtual Meeting, etc.).",
     inputSchema: { type: "object", properties: {} },
+    annotations: { readOnlyHint: true, idempotentHint: true },
   },
   {
     name: "ea_search_contacts",
@@ -118,6 +126,7 @@ export const TOOLS: McpTool[] = [
         phone: { type: "string" },
       },
     },
+    annotations: { readOnlyHint: true, idempotentHint: true },
   },
   {
     name: "ea_get_contact",
@@ -127,6 +136,7 @@ export const TOOLS: McpTool[] = [
       properties: { vanId: { type: "number" } },
       required: ["vanId"],
     },
+    annotations: { readOnlyHint: true, idempotentHint: true },
   },
   {
     name: "ea_get_contact_history",
@@ -136,6 +146,7 @@ export const TOOLS: McpTool[] = [
       properties: { vanId: { type: "number" } },
       required: ["vanId"],
     },
+    annotations: { readOnlyHint: true, idempotentHint: true },
   },
   {
     name: "ea_get_interaction_history",
@@ -145,6 +156,32 @@ export const TOOLS: McpTool[] = [
       properties: { vanId: { type: "number" } },
       required: ["vanId"],
     },
+    annotations: { readOnlyHint: true, idempotentHint: true },
+  },
+  {
+    name: "ea_batch_name_lookup",
+    description:
+      "Look up multiple contacts by name in one call and return their EveryAction history. Use this when reviewing a donor list or spreadsheet — pass all names at once instead of searching one by one. Returns contact details, last touch date, and recent notes for each person found.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        contacts: {
+          type: "array",
+          description: "List of people to look up",
+          items: {
+            type: "object",
+            properties: {
+              firstName: { type: "string" },
+              lastName: { type: "string" },
+              context: { type: "string", description: "Optional context from external source (e.g. DonorSearch capacity rating, employer)" },
+            },
+            required: ["firstName", "lastName"],
+          },
+        },
+      },
+      required: ["contacts"],
+    },
+    annotations: { readOnlyHint: true, idempotentHint: true },
   },
   {
     name: "ea_stage_interaction",
@@ -167,6 +204,7 @@ export const TOOLS: McpTool[] = [
         noteCategory: { type: "string" },
       },
     },
+    annotations: { readOnlyHint: true },
   },
   {
     name: "ea_log_note",
@@ -322,11 +360,13 @@ export const TOOLS: McpTool[] = [
       properties: { vanId: { type: "number" } },
       required: ["vanId"],
     },
+    annotations: { readOnlyHint: true, idempotentHint: true },
   },
   {
     name: "ea_list_custom_fields",
     description: "List all custom fields defined in this EveryAction organization (e.g. Bio, Notes, custom attributes). Use this to find customFieldId values before calling ea_set_custom_field.",
     inputSchema: { type: "object", properties: {} },
+    annotations: { readOnlyHint: true, idempotentHint: true },
   },
   {
     name: "ea_get_custom_field_values",
@@ -336,6 +376,7 @@ export const TOOLS: McpTool[] = [
       properties: { vanId: { type: "number" } },
       required: ["vanId"],
     },
+    annotations: { readOnlyHint: true, idempotentHint: true },
   },
   {
     name: "ea_set_custom_field",
@@ -359,6 +400,7 @@ export const TOOLS: McpTool[] = [
       properties: { vanId: { type: "number" } },
       required: ["vanId"],
     },
+    annotations: { readOnlyHint: true, idempotentHint: true },
   },
   {
     name: "ea_get_portfolio_summary",
@@ -373,6 +415,7 @@ export const TOOLS: McpTool[] = [
         limit: { type: "number" },
       },
     },
+    annotations: { readOnlyHint: true, idempotentHint: true },
   },
 ];
 
@@ -450,6 +493,119 @@ export async function callTool(
         const result = await client.getInteractions(vanId);
         if (!result.items?.length) return ok("No interaction history on file for this contact.");
         return ok(`${result.count ?? result.items.length} interaction(s) on file:\n\n${result.items.map(formatInteraction).join("\n\n")}`);
+      }
+
+      case "ea_batch_name_lookup": {
+        const contacts = args.contacts as Array<{ firstName: string; lastName: string; context?: string }>;
+        if (!contacts?.length) return err("Provide at least one contact.");
+        if (contacts.length > 50) return err("Maximum 50 contacts per batch.");
+
+        type BatchRow = {
+          input: string;
+          context?: string;
+          status: "found" | "not_found" | "multiple" | "error";
+          vanId?: number;
+          name?: string;
+          email?: string;
+          phone?: string;
+          daysSinceLastTouch: number | null;
+          lastTouchSummary: string;
+          recentNotes: string[];
+          errorMessage?: string;
+        };
+
+        const rows = await Promise.all(
+          contacts.map(async ({ firstName, lastName, context }): Promise<BatchRow> => {
+            const inputLabel = `${firstName} ${lastName}`;
+            try {
+              const found = await client.findPeople({ firstName, lastName });
+              if (!found.items?.length) {
+                return { input: inputLabel, context, status: "not_found", daysSinceLastTouch: null, lastTouchSummary: "Not in EveryAction", recentNotes: [] };
+              }
+              if (found.items.length > 1) {
+                const matches = found.items.map((p) => `VAN ${p.vanId}: ${[p.firstName, p.lastName].filter(Boolean).join(" ")}`).join(", ");
+                return { input: inputLabel, context, status: "multiple", daysSinceLastTouch: null, lastTouchSummary: `Multiple matches: ${matches}`, recentNotes: [] };
+              }
+
+              const person = found.items[0];
+              const vanId = person.vanId;
+              const name = [person.firstName, person.lastName].filter(Boolean).join(" ");
+              const email = person.emails?.[0]?.email ?? "-";
+              const phone = person.phones?.[0]?.phoneNumber ?? "-";
+
+              const notes = await client.getNotes(vanId);
+              const noteItems = notes.items ?? [];
+              const lastNote = noteItems[0];
+              const rawDate = lastNote?.createdDate ?? lastNote?.dateCreated;
+              const lastTouched = rawDate ? new Date(rawDate) : null;
+              const daysSinceLastTouch = lastTouched ? Math.floor((Date.now() - lastTouched.getTime()) / 86_400_000) : null;
+              const lastTouchSummary = daysSinceLastTouch === null
+                ? "Never contacted"
+                : daysSinceLastTouch === 0 ? "Contacted today"
+                : `${daysSinceLastTouch}d ago`;
+
+              const recentNotes = noteItems.slice(0, 3).map(formatNote);
+
+              return { input: inputLabel, context, status: "found", vanId, name, email, phone, daysSinceLastTouch, lastTouchSummary, recentNotes };
+            } catch (e) {
+              return { input: inputLabel, context, status: "error", daysSinceLastTouch: null, lastTouchSummary: "Error", recentNotes: [], errorMessage: e instanceof Error ? e.message : String(e) };
+            }
+          })
+        );
+
+        // Sort: never contacted first, then by days since last touch descending (most overdue first)
+        rows.sort((a, b) => {
+          if (a.status === "found" && b.status === "found") {
+            const aDays = a.daysSinceLastTouch ?? Infinity;
+            const bDays = b.daysSinceLastTouch ?? Infinity;
+            return bDays - aDays;
+          }
+          return 0;
+        });
+
+        const found = rows.filter((r) => r.status === "found");
+        const notFound = rows.filter((r) => r.status === "not_found");
+        const multiple = rows.filter((r) => r.status === "multiple");
+        const errors = rows.filter((r) => r.status === "error");
+
+        const lines: string[] = [
+          `BATCH LOOKUP: ${contacts.length} names — ${found.length} found, ${notFound.length} not in EA, ${multiple.length} ambiguous, ${errors.length} errors`,
+          "",
+        ];
+
+        if (found.length) {
+          lines.push("── FOUND (sorted by priority: longest since last contact first) ──", "");
+          for (const r of found) {
+            lines.push(`${r.name} (VAN ${r.vanId})`);
+            lines.push(`  Email: ${r.email} | Phone: ${r.phone}`);
+            lines.push(`  Last touch: ${r.lastTouchSummary}`);
+            if (r.context) lines.push(`  External context: ${r.context}`);
+            if (r.recentNotes.length) {
+              lines.push("  Recent notes:");
+              r.recentNotes.forEach((n) => lines.push(`    ${n}`));
+            }
+            lines.push("");
+          }
+        }
+
+        if (notFound.length) {
+          lines.push("── NOT IN EVERYACTION ──");
+          notFound.forEach((r) => lines.push(`  ${r.input}${r.context ? ` — ${r.context}` : ""}`));
+          lines.push("");
+        }
+
+        if (multiple.length) {
+          lines.push("── AMBIGUOUS (multiple matches — search individually) ──");
+          multiple.forEach((r) => lines.push(`  ${r.input}: ${r.lastTouchSummary}`));
+          lines.push("");
+        }
+
+        if (errors.length) {
+          lines.push("── ERRORS ──");
+          errors.forEach((r) => lines.push(`  ${r.input}: ${r.errorMessage}`));
+        }
+
+        return ok(lines.join("\n").trimEnd());
       }
 
       case "ea_stage_interaction": {
