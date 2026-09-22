@@ -1,0 +1,82 @@
+EveryAction Moves Management — setup
+====================================
+
+Update Moves Management action plans and follow-ups by asking Claude, instead
+of clicking through EveryAction's Financial tab.
+
+It uses the EveryAction you are ALREADY signed into in Chrome. It never asks
+for your password and there is nowhere for one to be stored. Your changes show
+up under your own name in EveryAction's history, exactly as if you had made
+them by hand.
+
+You need: a Mac, Chrome (the browser you use for EveryAction), and Claude
+Desktop installed.
+
+
+SETUP — about 5 minutes, mostly waiting
+---------------------------------------
+
+1. Unzip this folder. It doesn't matter where — Downloads is fine, and you
+   can delete it when you're done. The installer puts the real thing
+   somewhere permanent on its own.
+
+2. RIGHT-CLICK "Install.command" and choose Open.
+   Then click Open again when macOS asks if you're sure.
+
+   Right-click matters. Double-clicking gets blocked by macOS on anything
+   downloaded from the internet, and the warning makes it look broken.
+
+3. Press Return when the window asks, then let it run.
+
+   If a box appears asking to install developer tools, click Install and
+   wait for it to finish, then run Install.command again.
+
+   It will probably say Chrome isn't attached yet. That's expected on a
+   first install — step 4 sorts it out.
+
+4. When it finishes, do the three things it lists:
+     - Sign into EveryAction in Chrome
+     - Quit Claude Desktop completely (Command+Q) and reopen it
+     - Ask Claude:  check my EveryAction session
+
+   The first time, Chrome may ask "Allow remote debugging?" — click Allow.
+   It's remembered after that, and it's what lets Claude see the
+   EveryAction tab you're already signed into.
+
+
+UPDATES — you don't have to do anything
+---------------------------------------
+Once installed, it keeps itself current. When a fix ships, you get it the
+next time you quit and reopen Claude Desktop. Nobody has to send you a new
+copy of this folder, and this zip stays good however old it gets.
+
+
+TRY IT
+------
+    Find <donor last name> in EveryAction and show me their moves
+    management plans
+
+    What follow-ups do they have scheduled?
+
+    Schedule a follow-up call with them for October 20th, high priority,
+    noting that we're discussing the Baykeeper Circle ask
+
+Before changing anything it shows you exactly what it's about to do and waits
+for you to say go. It won't touch a donor record on its own.
+
+
+IF SOMETHING BREAKS
+-------------------
+"not signed in"         Open EveryAction in Chrome and sign in. Sessions
+                        expire during the day; this is normal.
+
+"Chrome not attached"   Make sure Chrome is actually running, then ask
+                        Claude to check the session again. If Chrome shows
+                        an "Allow remote debugging?" prompt, click Allow.
+
+No EveryAction tools    Quit Claude Desktop fully (Command+Q, not just the
+                        red X) and reopen.
+
+Keep Chrome open and signed into EveryAction while you're using this.
+
+Anything else — screenshot the window and send it to Cade.
