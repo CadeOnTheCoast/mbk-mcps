@@ -30,6 +30,17 @@ warn() { printf '  ! %s\n' "$*"; }
 # pushed to this public repo reaches every install the next time Claude
 # Desktop restarts it, with nobody sent a new zip.
 say "1/6  Fetching the tool"
+# `command -v git` is not a usable check on macOS: /usr/bin/git is a stub that
+# exists even with no developer tools installed, pops the install dialog, and
+# fails. Actually running it is the only way to know it works.
+if ! git --version >/dev/null 2>&1; then
+  warn "macOS needs its developer tools installed before this can run."
+  warn "A box should have just appeared asking to install them -- click"
+  warn "Install and let it finish (it takes a few minutes), then open"
+  warn "Install.command again. Nothing here is broken; this is a one-time"
+  warn "macOS step."
+  exit 1
+fi
 if [ -d "$INSTALL_ROOT/.git" ]; then
   if git -C "$INSTALL_ROOT" pull --ff-only --quiet origin main; then
     ok "up to date"
