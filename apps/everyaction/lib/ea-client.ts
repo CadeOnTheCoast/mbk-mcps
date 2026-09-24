@@ -779,15 +779,32 @@ export class EAClient {
     await this.request<void>('PUT', `/people/${sourceVanId}/mergeInto`, { vanId: targetVanId })
   }
 
+  /**
+   * List custom field definitions.
+   *
+   * NOTE: /customFields returns a BARE JSON array, like the other supporting-list
+   * endpoints — not the { items, count } envelope. Reading `.items` off the raw
+   * response silently yields undefined, which made every custom-field tool report
+   * "no custom fields defined" even when the org had them. Normalize via asItems().
+   */
   async listCustomFields(): Promise<{ items: EACustomField[] }> {
-    return this.request<{ items: EACustomField[] }>('GET', '/customFields', undefined, { $top: '200' })
+    const raw = await this.request<unknown>('GET', '/customFields', undefined, { $top: '200' })
+    return asItems<EACustomField>(raw)
   }
 
+  /**
+   * Read a person's custom field values.
+   *
+   * NOTE: the expanded person object returns these under `customFields`, NOT
+   * `customFieldValues` (verified against a live record). Reading the wrong key
+   * made this always return an empty list. Accept both so we're robust either way.
+   */
   async getCustomFieldValues(vanId: number): Promise<{ items: EACustomFieldValue[] }> {
-    const person = await this.request<{ customFieldValues?: EACustomFieldValue[] }>(
-      'GET', `/people/${vanId}`, undefined, { $expand: 'customFields' }
-    )
-    return { items: person.customFieldValues ?? [] }
+    const person = await this.request<{
+      customFields?: EACustomFieldValue[]
+      customFieldValues?: EACustomFieldValue[]
+    }>('GET', `/people/${vanId}`, undefined, { $expand: 'customFields' })
+    return { items: person.customFields ?? person.customFieldValues ?? [] }
   }
 
   async setCustomField(vanId: number, customFieldId: number, value: string): Promise<void> {
