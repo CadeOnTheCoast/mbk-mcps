@@ -53,6 +53,20 @@ export async function POST(req: NextRequest) {
 
   const grantType = body.grant_type;
 
+  // Diagnose failed connects without ever logging the secret itself.
+  console.log(JSON.stringify({
+    t: new Date().toISOString(),
+    evt: "token_request",
+    grant: grantType,
+    secretVia: body.client_secret ? "body" : authz?.startsWith("Basic ") ? "basic" : "none",
+    secretLen: clientSecret?.length ?? 0,
+    secretHasSpace: /\s/.test(clientSecret ?? ""),
+    secretHasColon: (clientSecret ?? "").includes(":"),
+    clientIdLen: (body.client_id ?? "").length,
+    contentType,
+    who: identifySecret(clientSecret) ?? null,
+  }));
+
   const issue = () =>
     NextResponse.json(
       // The refresh token is the secret too, so renewal needs no stored state and
