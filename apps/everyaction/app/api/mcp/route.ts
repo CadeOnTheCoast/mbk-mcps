@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { EAClient } from "@/lib/ea-client";
 import { TOOLS, callTool } from "@/lib/tools";
+import { identifySecret } from "@/lib/auth";
 
 const SITE_URL = (process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3001").replace(/\/$/, "");
 
@@ -91,9 +92,8 @@ export async function POST(req: Request) {
   const authHeader = req.headers.get("authorization");
   if (!authHeader?.startsWith("Bearer ")) return unauthorized();
 
-  const token = authHeader.slice(7);
-  const expected = process.env.MCP_CLIENT_SECRET;
-  if (!expected || token !== expected) {
+  const who = identifySecret(authHeader.slice(7));
+  if (!who) {
     logEvent({ evt: "auth_rejected" });
     return unauthorized();
   }
@@ -138,6 +138,7 @@ export async function POST(req: Request) {
           const failed = r?.isError === true;
           logEvent({
             evt: "tool_call",
+            who,
             tool: toolName,
             ok: !failed,
             ms: Date.now() - startedAt,
@@ -148,6 +149,7 @@ export async function POST(req: Request) {
         } catch (e: any) {
           logEvent({
             evt: "tool_call",
+            who,
             tool: toolName,
             ok: false,
             ms: Date.now() - startedAt,
@@ -162,7 +164,7 @@ export async function POST(req: Request) {
         return rpcError(id, -32601, `Method not found: ${method}`);
     }
   } catch (e: any) {
-    logEvent({ evt: "rpc_error", method, err: e?.message ?? "Internal error" });
+    logEvent({ evt: "rpc_error", who, method, err: e?.message ?? "Internal error" });
     return rpcError(id, -32603, e?.message ?? "Internal error");
   }
 }

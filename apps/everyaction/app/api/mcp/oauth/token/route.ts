@@ -1,10 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAuthCode, verifyPkceS256 } from "@/lib/oauth";
+import { identifySecret } from "@/lib/auth";
 
 // Token endpoint. Supports two grants:
 //   authorization_code (+ PKCE) — what Claude.ai's connector uses
 //   client_credentials          — kept for direct/script access
-// In both cases the issued access token is the MCP_CLIENT_SECRET, which the
+// In both cases the issued access token is the client secret that was presented
+// (staff MCP_CLIENT_SECRET or a per-user secret from MCP_USER_SECRETS), which the
 // /api/mcp route validates as the Bearer token.
 
 function form(headers?: Record<string, string>) {
@@ -52,7 +54,7 @@ export async function POST(req: NextRequest) {
 
   const issue = () =>
     NextResponse.json(
-      { access_token: expected, token_type: "Bearer", expires_in: 86400, scope: "mcp" },
+      { access_token: clientSecret, token_type: "Bearer", expires_in: 86400, scope: "mcp" },
       form()
     );
 
@@ -74,14 +76,14 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "invalid_grant", error_description: "PKCE verification failed" }, { status: 400, ...form() });
     }
     // PKCE proves the caller initiated the flow; the client secret confirms org authorization.
-    if (clientSecret !== expected) {
+    if (!identifySecret(clientSecret)) {
       return NextResponse.json({ error: "invalid_client" }, { status: 401, ...form() });
     }
     return issue();
   }
 
   if (grantType === "client_credentials") {
-    if (clientSecret !== expected) {
+    if (!identifySecret(clientSecret)) {
       return NextResponse.json({ error: "invalid_client" }, { status: 401, ...form() });
     }
     return issue();
