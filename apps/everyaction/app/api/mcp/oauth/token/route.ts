@@ -2,8 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyAuthCode, verifyPkceS256 } from "@/lib/oauth";
 import { identifySecret } from "@/lib/auth";
 
-// Token endpoint. Supports two grants:
+// Token endpoint. Supports three grants:
 //   authorization_code (+ PKCE) — what Claude.ai's connector uses
+//   refresh_token               — lets Claude renew silently instead of asking the user to reconnect
 //   client_credentials          — kept for direct/script access
 // In both cases the issued access token is the client secret that was presented
 // (staff MCP_CLIENT_SECRET or a per-user secret from MCP_USER_SECRETS), which the
@@ -54,7 +55,9 @@ export async function POST(req: NextRequest) {
 
   const issue = () =>
     NextResponse.json(
-      { access_token: clientSecret, token_type: "Bearer", expires_in: 86400, scope: "mcp" },
+      // The refresh token is the secret too, so renewal needs no stored state and
+      // stops working as soon as that secret is removed.
+      { access_token: clientSecret, refresh_token: clientSecret, token_type: "Bearer", expires_in: 30 * 86400, scope: "mcp" },
       form()
     );
 
@@ -78,6 +81,15 @@ export async function POST(req: NextRequest) {
     // PKCE proves the caller initiated the flow; the client secret confirms org authorization.
     if (!identifySecret(clientSecret)) {
       return NextResponse.json({ error: "invalid_client" }, { status: 401, ...form() });
+    }
+    return issue();
+  }
+
+  if (grantType === "refresh_token") {
+    // Claude may send the refresh token without repeating the client secret.
+    if (!clientSecret) clientSecret = body.refresh_token;
+    if (!identifySecret(body.refresh_token) || body.refresh_token !== clientSecret) {
+      return NextResponse.json({ error: "invalid_grant" }, { status: 400, ...form() });
     }
     return issue();
   }
