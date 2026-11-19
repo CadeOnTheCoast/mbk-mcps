@@ -372,6 +372,20 @@ export const TOOLS: McpTool[] = [
     annotations: { readOnlyHint: true, idempotentHint: true },
   },
   {
+    name: "ea_create_tag",
+    description: "Create a new EveryAction Tag. To create a subtag, pass parentTagId or parentTagName (the parent must already exist). Names only need to be unique under their parent. Check ea_list_tags first to avoid duplicates.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: { type: "string" },
+        description: { type: "string" },
+        parentTagId: { type: "number", description: "Makes this a subtag of that tag" },
+        parentTagName: { type: "string", description: "Parent tag path or name, resolved if parentTagId not known" },
+      },
+      required: ["name"],
+    },
+  },
+  {
     name: "ea_apply_tag",
     description: "Apply an EveryAction Tag to a contact. Pass tagId, or tagName (full path preferred; fails if ambiguous). Use ea_list_tags to find tags.",
     inputSchema: {
@@ -870,6 +884,29 @@ export async function callTool(
         const tags = (await client.listTags()).filter((t) => !query || (t.codePath ?? t.name ?? "").toLowerCase().includes(query));
         if (!tags.length) return ok(query ? `No tags matched "${query}".` : "No tags returned.");
         return ok(tags.map((t) => `${t.codeId}: ${t.codePath ?? t.name}`).join("\n"));
+      }
+
+      case "ea_create_tag": {
+        const tagName = (args.name as string).trim();
+        if (!tagName) return err("name is required.");
+        let parentId = args.parentTagId as number | undefined;
+        let parentLabel: string | undefined;
+        const parentName = args.parentTagName as string | undefined;
+        if (!parentId && parentName) {
+          const matches = await client.resolveTag(parentName);
+          if (!matches.length) return err(`No parent tag matched "${parentName}". Run ea_list_tags to see options.`);
+          if (matches.length > 1) {
+            return err(`Parent "${parentName}" matches ${matches.length} tags; pass parentTagId:\n${matches.map((t) => `${t.codeId}: ${t.codePath ?? t.name}`).join("\n")}`);
+          }
+          parentId = matches[0].codeId;
+          parentLabel = matches[0].codePath ?? matches[0].name ?? undefined;
+        }
+        const siblings = (await client.listTags()).filter(
+          (t) => (t.parentCodeId ?? null) === (parentId ?? null) && (t.name ?? "").trim().toLowerCase() === tagName.toLowerCase()
+        );
+        if (siblings.length) return err(`Tag "${siblings[0].codePath ?? siblings[0].name}" already exists (ID ${siblings[0].codeId}).`);
+        const id = await client.createTag({ name: tagName, parentCodeId: parentId, description: args.description as string | undefined });
+        return ok(`Created tag "${parentLabel ? `${parentLabel}/` : ""}${tagName}" (ID ${id}).`);
       }
 
       case "ea_apply_tag":

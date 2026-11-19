@@ -650,6 +650,22 @@ export class EAClient {
     return tags.filter((t) => (t.codePath ?? t.name ?? '').toLowerCase().includes(needle))
   }
 
+  /** Create a Tag; pass parentCodeId to make it a subtag. Returns the new codeId. */
+  async createTag(input: { name: string; parentCodeId?: number | null; description?: string }): Promise<number> {
+    const result = await this.request<number | { codeId: number }>('POST', '/codes', {
+      parentCodeId: input.parentCodeId ?? null,
+      name: input.name,
+      codeType: 'Tag',
+      description: input.description ?? null,
+      supportedEntities: [{ name: 'Contacts', isSearchable: true, isApplicable: true }],
+    })
+    return typeof result === 'number' ? result : result.codeId
+  }
+
+  async deleteTag(codeId: number): Promise<void> {
+    await this.request<void>('DELETE', `/codes/${codeId}`)
+  }
+
   async applyTag(vanId: number, codeId: number): Promise<void> {
     await this.request<void>('POST', `/people/${vanId}/codes`, { codeId })
   }
