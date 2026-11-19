@@ -117,6 +117,16 @@ export interface EAActivistCode {
   status?: string | null
 }
 
+export interface EATag {
+  codeId: number
+  parentCodeId?: number | null
+  name?: string | null
+  description?: string | null
+  codePath?: string | null
+  codeType?: string | null
+  dateCreated?: string | null
+}
+
 export interface EAContactType {
   contactTypeId: number
   name?: string | null
@@ -615,6 +625,43 @@ export class EAClient {
       if (await supports(it.inputTypeId)) return it.inputTypeId
     }
     return undefined
+  }
+
+  /**
+   * Tags are EveryAction "Codes" with codeType "Tag" (Engagement > Tags in the UI).
+   * /codes also returns SourceCodes, so filter client-side (the codeTypeId param is
+   * ignored). Tags are hierarchical: names can repeat under different parents, so
+   * codePath is the unambiguous label.
+   */
+  async listTags(): Promise<EATag[]> {
+    const result = await this.request<{ items: EATag[] }>('GET', '/codes', undefined, { $top: '200' })
+    return (result.items ?? []).filter((c) => c.codeType === 'Tag')
+  }
+
+  /** Exact codePath/name match first; otherwise a unique substring match. Returns all candidates. */
+  async resolveTag(name: string): Promise<EATag[]> {
+    const needle = name.trim().toLowerCase()
+    if (!needle) return []
+    const tags = await this.listTags()
+    const exact = tags.filter(
+      (t) => (t.codePath ?? '').toLowerCase() === needle || (t.name ?? '').toLowerCase() === needle
+    )
+    if (exact.length) return exact
+    return tags.filter((t) => (t.codePath ?? t.name ?? '').toLowerCase().includes(needle))
+  }
+
+  async applyTag(vanId: number, codeId: number): Promise<void> {
+    await this.request<void>('POST', `/people/${vanId}/codes`, { codeId })
+  }
+
+  async removeTag(vanId: number, codeId: number): Promise<void> {
+    await this.request<void>('DELETE', `/people/${vanId}/codes/${codeId}`)
+  }
+
+  /** GET /people/{id}/codes is 403 for API keys; the expanded person carries `codes`. */
+  async listContactTags(vanId: number): Promise<EATag[]> {
+    const person = await this.request<{ codes?: EATag[] | null }>('GET', `/people/${vanId}`, undefined, { $expand: 'codes' })
+    return (person.codes ?? []).filter((c) => c.codeType === 'Tag')
   }
 
   async findActivistCodeByName(name: string): Promise<EAActivistCode | null> {

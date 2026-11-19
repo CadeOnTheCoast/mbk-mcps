@@ -363,6 +363,51 @@ export const TOOLS: McpTool[] = [
     annotations: { readOnlyHint: true, idempotentHint: true },
   },
   {
+    name: "ea_list_tags",
+    description: "List EveryAction Tags (Engagement > Tags; the API calls them codes). These are NOT activist codes. Tags are hierarchical, so each is shown by its full path (e.g. 'Baldwin County Smart Growth/Fairhope Listening Session').",
+    inputSchema: {
+      type: "object",
+      properties: { query: { type: "string", description: "Case-insensitive filter on the tag path" } },
+    },
+    annotations: { readOnlyHint: true, idempotentHint: true },
+  },
+  {
+    name: "ea_apply_tag",
+    description: "Apply an EveryAction Tag to a contact. Pass tagId, or tagName (full path preferred; fails if ambiguous). Use ea_list_tags to find tags.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        vanId: { type: "number" },
+        tagId: { type: "number" },
+        tagName: { type: "string", description: "Tag path or name, resolved if tagId not known" },
+      },
+      required: ["vanId"],
+    },
+  },
+  {
+    name: "ea_remove_tag",
+    description: "Remove an EveryAction Tag from a contact.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        vanId: { type: "number" },
+        tagId: { type: "number" },
+        tagName: { type: "string" },
+      },
+      required: ["vanId"],
+    },
+  },
+  {
+    name: "ea_list_contact_tags",
+    description: "List the EveryAction Tags currently applied to a contact.",
+    inputSchema: {
+      type: "object",
+      properties: { vanId: { type: "number" } },
+      required: ["vanId"],
+    },
+    annotations: { readOnlyHint: true, idempotentHint: true },
+  },
+  {
     name: "ea_list_custom_fields",
     description: "List all custom fields defined in this EveryAction organization (e.g. Bio, Notes, custom attributes). Use this to find customFieldId values before calling ea_set_custom_field.",
     inputSchema: { type: "object", properties: {} },
@@ -818,6 +863,43 @@ export async function callTool(
         const items = result.items ?? [];
         if (!items.length) return ok(`VAN ${vanId} has no activist codes applied.`);
         return ok(`Activist codes on VAN ${vanId}:\n${items.map((c) => `  ${c.activistCodeId}: ${c.activistCodeName}`).join("\n")}`);
+      }
+
+      case "ea_list_tags": {
+        const query = (args.query as string | undefined)?.trim().toLowerCase();
+        const tags = (await client.listTags()).filter((t) => !query || (t.codePath ?? t.name ?? "").toLowerCase().includes(query));
+        if (!tags.length) return ok(query ? `No tags matched "${query}".` : "No tags returned.");
+        return ok(tags.map((t) => `${t.codeId}: ${t.codePath ?? t.name}`).join("\n"));
+      }
+
+      case "ea_apply_tag":
+      case "ea_remove_tag": {
+        const vanId = args.vanId as number;
+        let tagId = args.tagId as number | undefined;
+        let label: string | number | undefined = args.tagName as string | undefined;
+        if (!tagId) {
+          if (!label) return err("Provide tagId or tagName.");
+          const matches = await client.resolveTag(label);
+          if (!matches.length) return err(`No tag matched "${label}". Run ea_list_tags to see options.`);
+          if (matches.length > 1) {
+            return err(`"${label}" matches ${matches.length} tags; pass tagId:\n${matches.map((t) => `${t.codeId}: ${t.codePath ?? t.name}`).join("\n")}`);
+          }
+          tagId = matches[0].codeId;
+          label = matches[0].codePath ?? matches[0].name ?? label;
+        }
+        if (name === "ea_apply_tag") {
+          await client.applyTag(vanId, tagId);
+          return ok(`Applied tag "${label ?? tagId}" (ID ${tagId}) to VAN ${vanId}.`);
+        }
+        await client.removeTag(vanId, tagId);
+        return ok(`Removed tag "${label ?? tagId}" (ID ${tagId}) from VAN ${vanId}.`);
+      }
+
+      case "ea_list_contact_tags": {
+        const vanId = args.vanId as number;
+        const tags = await client.listContactTags(vanId);
+        if (!tags.length) return ok(`VAN ${vanId} has no tags applied.`);
+        return ok(`Tags on VAN ${vanId}:\n${tags.map((t) => `  ${t.codeId}: ${t.codePath ?? t.name}`).join("\n")}`);
       }
 
       case "ea_list_custom_fields": {
