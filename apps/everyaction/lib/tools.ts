@@ -1,4 +1,4 @@
-import { EAClient, EACustomField, EACustomFieldValue, EAInteraction } from "./ea-client";
+import { EAClient, EACustomField, EACustomFieldValue, EAInteraction, contactDisplayName } from "./ea-client";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -40,10 +40,13 @@ function formatPerson(p: {
   vanId: number;
   firstName: string | null;
   lastName: string | null;
+  contactMode?: string | null;
+  organizationContactCommonName?: string | null;
+  organizationContactOfficialName?: string | null;
   emails?: Array<{ email: string }>;
   phones?: Array<{ phoneNumber: string }>;
 }) {
-  const name = [p.firstName, p.lastName].filter(Boolean).join(" ") || "(no name)";
+  const name = contactDisplayName(p) + (p.contactMode === "Organization" ? " [Organization]" : "");
   const email = p.emails?.[0]?.email ?? "-";
   const phone = p.phones?.[0]?.phoneNumber ?? "-";
   return `VAN ${p.vanId}: ${name} | ${email} | ${phone}`;
@@ -127,6 +130,66 @@ export const TOOLS: McpTool[] = [
       },
     },
     annotations: { readOnlyHint: true, idempotentHint: true },
+  },
+  {
+    name: "ea_search_organizations",
+    description:
+      "Search EveryAction ORGANIZATION records (businesses, agencies, nonprofits, foundations). Organizations are not found by ea_search_contacts' first/last name search. Name matching is a case-insensitive PREFIX match on the org's name: 'Mobile Bay' finds 'Mobile Baykeeper', but 'Baykeeper' does not — if nothing comes back, retry with the first word(s) of the name, or search by email/phone/city. Returns VAN IDs usable with every contact tool (ea_get_contact_full, ea_log_note, ea_log_interaction, ea_apply_tag, ea_add_contact_email, etc.).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "Start of the organization's name" },
+        email: { type: "string" },
+        phone: { type: "string" },
+        city: { type: "string" },
+        stateOrProvince: { type: "string", description: "Two-letter state abbreviation" },
+        limit: { type: "number", description: "Max results (default 25, max 50)" },
+      },
+    },
+    annotations: { readOnlyHint: true, idempotentHint: true },
+  },
+  {
+    name: "ea_find_or_create_organization",
+    description:
+      "Find an existing organization record or create one if it doesn't exist. Run ea_search_organizations first to avoid duplicates (names are matched by prefix, so variants like 'Inc.' can slip past).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "Common/display name, e.g. 'Mobile Baykeeper'" },
+        officialName: { type: "string", description: "Legal name, e.g. 'Mobile Baykeeper, Inc.'" },
+        website: { type: "string" },
+        email: { type: "string" },
+        phone: { type: "string" },
+        addressLine1: { type: "string" },
+        addressLine2: { type: "string" },
+        city: { type: "string" },
+        stateOrProvince: { type: "string", description: "Two-letter state abbreviation" },
+        zipOrPostalCode: { type: "string" },
+      },
+      required: ["name"],
+    },
+  },
+  {
+    name: "ea_update_organization",
+    description:
+      "Edit an organization record: rename it (common and/or official name), set its website, or add an email, phone, or address. Only the fields you pass are changed. For notes, interactions, tags, activist codes, and custom fields on an organization, use the regular contact tools with its VAN ID.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        vanId: { type: "number" },
+        name: { type: "string", description: "Common/display name, e.g. 'Mobile Baykeeper'" },
+        officialName: { type: "string", description: "Legal name, e.g. 'Mobile Baykeeper, Inc.'" },
+        website: { type: "string" },
+        email: { type: "string" },
+        phone: { type: "string" },
+        addressLine1: { type: "string" },
+        addressLine2: { type: "string" },
+        city: { type: "string" },
+        stateOrProvince: { type: "string", description: "Two-letter state abbreviation" },
+        zipOrPostalCode: { type: "string" },
+      },
+      required: ["vanId"],
+    },
   },
   {
     name: "ea_get_contact",
@@ -525,10 +588,67 @@ export async function callTool(
         return ok(`Found ${result.count} match(es):\n${result.items.map(formatPerson).join("\n")}`);
       }
 
+      case "ea_search_organizations": {
+        const q = {
+          name: args.name as string | undefined,
+          email: args.email as string | undefined,
+          phone: args.phone as string | undefined,
+          city: args.city as string | undefined,
+          stateOrProvince: args.stateOrProvince as string | undefined,
+          limit: args.limit as number | undefined,
+        };
+        if (!q.name && !q.email && !q.phone && !q.city && !q.stateOrProvince) {
+          return err("Provide a name, email, phone, city, or state to search organizations.");
+        }
+        const result = await client.searchOrganizations(q);
+        if (!result.items.length) {
+          const hint = q.name
+            ? ` Name search matches the START of the org name only — try the first word(s) (e.g. "Mobile" rather than "Baykeeper"), or search by email/phone/city.`
+            : "";
+          return ok(`No organizations found.${hint}`);
+        }
+        return ok(`Found ${result.count} organization(s):\n${result.items.map(formatPerson).join("\n")}`);
+      }
+
+      case "ea_find_or_create_organization":
+      case "ea_update_organization": {
+        const address = args.addressLine1
+          ? {
+              addressLine1: args.addressLine1 as string,
+              addressLine2: args.addressLine2 as string | undefined,
+              city: args.city as string | undefined,
+              stateOrProvince: args.stateOrProvince as string | undefined,
+              zipOrPostalCode: args.zipOrPostalCode as string | undefined,
+            }
+          : undefined;
+        const input = {
+          name: (args.name as string | undefined)?.trim() || undefined,
+          officialName: (args.officialName as string | undefined)?.trim() || undefined,
+          website: args.website as string | undefined,
+          email: args.email as string | undefined,
+          phone: args.phone as string | undefined,
+          address,
+        };
+        if (name === "ea_find_or_create_organization") {
+          if (!input.name) return err("name is required.");
+          const result = await client.findOrCreateOrganization({ ...input, name: input.name });
+          const verb = result.status === "Matched" ? "Found existing" : "Created new";
+          return ok(`${verb} organization "${input.name}": VAN ID ${result.vanId}`);
+        }
+        const vanId = args.vanId as number;
+        const existing = await client.getPerson(vanId);
+        if (existing.contactMode !== "Organization") {
+          return err(`VAN ${vanId} (${contactDisplayName(existing)}) is a person, not an organization. Use ea_update_contact instead.`);
+        }
+        await client.updateOrganization(vanId, input);
+        const changed = Object.entries(input).filter(([, v]) => v !== undefined).map(([k]) => k);
+        return ok(`Updated organization VAN ${vanId} (${contactDisplayName(existing)}): ${changed.join(", ")}.`);
+      }
+
       case "ea_get_contact": {
         const vanId = args.vanId as number;
         const { person, recentNotes } = await client.getContactSummary(vanId);
-        const name = [person.firstName, person.lastName].filter(Boolean).join(" ") || "(no name)";
+        const name = contactDisplayName(person) + (person.contactMode === "Organization" ? " [Organization]" : "");
         const email = person.emails?.find((e) => e.isPrimary)?.email ?? person.emails?.[0]?.email ?? "-";
         const phone = person.phones?.[0]?.phoneNumber ?? "-";
         const addr = person.addresses?.find((a) => a.isPrimary) ?? person.addresses?.[0];
@@ -999,8 +1119,14 @@ export async function callTool(
         const p = person.value;
 
         const lines: string[] = [];
-        const name = [p.prefix, p.firstName, p.middleName, p.lastName, p.suffix].filter(Boolean).join(" ") || "(no name)";
-        lines.push(`=== ${name} | VAN ${vanId} ===`);
+        const isOrg = p.contactMode === "Organization";
+        const name = isOrg
+          ? contactDisplayName(p)
+          : [p.prefix, p.firstName, p.middleName, p.lastName, p.suffix].filter(Boolean).join(" ") || "(no name)";
+        lines.push(`=== ${name} | VAN ${vanId}${isOrg ? " | Organization" : ""} ===`);
+        if (isOrg && p.organizationContactOfficialName && p.organizationContactOfficialName !== name) {
+          lines.push(`  Official name: ${p.organizationContactOfficialName}`);
+        }
         if (p.nickname) lines.push(`  Nickname: ${p.nickname}`);
         if (p.employer) lines.push(`  Employer: ${p.employer}`);
         if (p.occupation) lines.push(`  Title: ${p.occupation}`);

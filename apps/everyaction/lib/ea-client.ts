@@ -39,6 +39,10 @@ export interface EAClientConfig {
 
 export interface EAPerson {
   vanId: number
+  /** "Person" or "Organization". Organizations have null first/last names. */
+  contactMode?: string | null
+  organizationContactCommonName?: string | null
+  organizationContactOfficialName?: string | null
   firstName: string | null
   lastName: string | null
   middleName?: string | null
@@ -104,6 +108,9 @@ export interface EANote {
 
 export interface EAFindResult {
   vanId: number
+  contactMode?: string | null
+  organizationContactCommonName?: string | null
+  organizationContactOfficialName?: string | null
   firstName: string | null
   lastName: string | null
   emails?: Array<{ email: string }>
@@ -168,6 +175,38 @@ export const DEFAULT_CONTACT_TYPES = {
 const INPUT_TYPE_MANUAL = 11
 // EveryAction's "API" input type. contactHistory.inputTypeId defaults to this.
 const DEFAULT_INPUT_TYPE_API = 11
+
+/** Display name for a person OR organization record (orgs have null first/last names). */
+export function contactDisplayName(p: {
+  firstName?: string | null
+  lastName?: string | null
+  contactMode?: string | null
+  organizationContactCommonName?: string | null
+  organizationContactOfficialName?: string | null
+}): string {
+  if (p.contactMode === 'Organization' || p.organizationContactCommonName || p.organizationContactOfficialName) {
+    const org = p.organizationContactCommonName ?? p.organizationContactOfficialName
+    if (org) return org
+  }
+  return [p.firstName, p.lastName].filter(Boolean).join(' ') || '(no name)'
+}
+
+export interface EAOrganizationInput {
+  /** Common (display) name, e.g. "Mobile Baykeeper". */
+  name?: string
+  /** Legal/official name, e.g. "Mobile Baykeeper, Inc." */
+  officialName?: string
+  website?: string
+  email?: string
+  phone?: string
+  address?: {
+    addressLine1: string
+    addressLine2?: string
+    city?: string
+    stateOrProvince?: string
+    zipOrPostalCode?: string
+  }
+}
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -417,6 +456,77 @@ export class EAClient {
     }
 
     return { items: [], count: 0 }
+  }
+
+  /**
+   * Search organization records. Organizations live in /people with
+   * contactMode=Organization. GET /people rejects contactMode alone ("requires at
+   * least one search parameter"); the org-name params are `commonName` and
+   * `officialName` (NOT organizationContactCommonName), and both are
+   * case-insensitive PREFIX matches — "Mobile Bay" finds "Mobile Baykeeper" but
+   * "Baykeeper" does not. Verified live 2026-11-20.
+   */
+  async searchOrganizations(query: {
+    name?: string
+    email?: string
+    phone?: string
+    city?: string
+    stateOrProvince?: string
+    limit?: number
+  }): Promise<{ items: EAFindResult[]; count: number }> {
+    const top = String(Math.min(Math.max(query.limit ?? 25, 1), 50))
+    const base: Record<string, string> = { contactMode: 'Organization', $top: top }
+    if (query.email) base.email = query.email
+    if (query.phone) base.phone = query.phone
+    if (query.city) base.city = query.city
+    if (query.stateOrProvince) base.stateOrProvince = query.stateOrProvince
+
+    const name = query.name?.trim()
+    const attempts: Array<Record<string, string>> = name
+      ? [{ ...base, commonName: name }, { ...base, officialName: name }]
+      : [base]
+
+    const seen = new Map<number, EAFindResult>()
+    for (const params of attempts) {
+      if (Object.keys(params).length <= 2) continue // only contactMode + $top: EA rejects it
+      const result = await this.request<{ items: EAFindResult[] }>('GET', '/people', undefined, params)
+      for (const item of result.items ?? []) if (!seen.has(item.vanId)) seen.set(item.vanId, item)
+    }
+    const items = Array.from(seen.values())
+    return { items, count: items.length }
+  }
+
+  /**
+   * Find an organization by name (+ email/phone if given) or create it.
+   * POST /people/findOrCreate with contactMode=Organization; /people/find with
+   * the same body was verified to match existing orgs.
+   */
+  async findOrCreateOrganization(input: EAOrganizationInput & { name: string }): Promise<{ vanId: number; status: string }> {
+    // Default the official (legal) name to the common name when not given.
+    const payload = this.organizationPayload({ ...input, officialName: input.officialName || input.name })
+    payload.contactMode = 'Organization'
+    const result = await this.request<{ vanId: number; status?: string; isDuplicate?: boolean }>(
+      'POST', '/people/findOrCreate', payload
+    )
+    return { vanId: result.vanId, status: result.status ?? (result.isDuplicate ? 'Matched' : 'Stored') }
+  }
+
+  /** Update an organization's names/website/contact info via POST /people/{vanId}. */
+  async updateOrganization(vanId: number, input: EAOrganizationInput): Promise<void> {
+    const payload = this.organizationPayload(input)
+    if (!Object.keys(payload).length) throw new Error('Nothing to update.')
+    await this.request<void>('POST', `/people/${vanId}`, payload)
+  }
+
+  private organizationPayload(input: EAOrganizationInput): Record<string, unknown> {
+    const payload: Record<string, unknown> = {}
+    if (input.name) payload.organizationContactCommonName = input.name
+    if (input.officialName) payload.organizationContactOfficialName = input.officialName
+    if (input.website) payload.website = input.website
+    if (input.email) payload.emails = [{ email: input.email, isPreferred: true }]
+    if (input.phone) payload.phones = [{ phoneNumber: input.phone, isPreferred: true }]
+    if (input.address) payload.addresses = [{ ...input.address, isPreferred: true }]
+    return payload
   }
 
   async getPerson(vanId: number): Promise<EAPerson> {
